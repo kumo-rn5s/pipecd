@@ -31,9 +31,9 @@ import (
 	"github.com/pipe-cd/pipecd/pkg/model"
 )
 
-var usernameClaimKeys = []string{"username", "preferred_username", "name", "cognito:username"}
-var avatarURLClaimKeys = []string{"picture", "avatar_url"}
-var roleClaimKeys = []string{"groups", "roles", "cognito:groups", "custom:roles", "custom:groups"}
+var defaultUsernameClaimKeys = []string{"username", "preferred_username", "name", "cognito:username"}
+var defaultAvatarURLClaimKeys = []string{"picture", "avatar_url"}
+var defaultRoleClaimKeys = []string{"groups", "roles", "cognito:groups", "custom:roles", "custom:groups"}
 
 // OAuthClient is an oauth client for OIDC.
 type OAuthClient struct {
@@ -96,14 +96,14 @@ func NewOAuthClient(ctx context.Context,
 }
 
 // GetUser returns a user model.
-func (c *OAuthClient) GetUser(ctx context.Context, clientID string) (*model.User, error) {
+func (c *OAuthClient) GetUser(ctx context.Context) (*model.User, error) {
 
 	idTokenRAW, ok := c.Token.Extra("id_token").(string)
 	if !ok {
 		return nil, fmt.Errorf("no id_token in oauth2 token")
 	}
 
-	verifier := c.Provider.Verifier(&oidc.Config{ClientID: clientID})
+	verifier := c.Provider.Verifier(&oidc.Config{ClientID: c.project.Sso.Oidc.ClientId})
 	idToken, err := verifier.Verify(ctx, idTokenRAW)
 	if err != nil {
 		return nil, err
@@ -130,12 +130,12 @@ func (c *OAuthClient) GetUser(ctx context.Context, clientID string) (*model.User
 		}
 	}
 
-	role, err := c.decideRole(claims)
+	role, err := c.decideRole(claims, c.project.Sso.Oidc.RolesClaimKey)
 	if err != nil {
 		return nil, err
 	}
 
-	username, avatarURL, err := c.decideUserInfos(claims)
+	username, avatarURL, err := c.decideUserInfos(claims, c.project.Sso.Oidc.UsernameClaimKey, c.project.Sso.Oidc.AvatarUrlClaimKey)
 	if err != nil {
 		return nil, err
 	}
@@ -146,12 +146,19 @@ func (c *OAuthClient) GetUser(ctx context.Context, clientID string) (*model.User
 	}, nil
 }
 
-func (c *OAuthClient) decideRole(claims jwt.MapClaims) (role *model.Role, err error) {
+func (c *OAuthClient) decideRole(claims jwt.MapClaims, roleClaimKey string) (role *model.Role, err error) {
 	roleStrings := make([]string, 0)
 
 	role = &model.Role{
 		ProjectId:        c.project.Id,
 		ProjectRbacRoles: roleStrings,
+	}
+
+	roleClaimKeys := []string{}
+	if roleClaimKey != "" {
+		roleClaimKeys = append(roleClaimKeys, roleClaimKey)
+	} else {
+		roleClaimKeys = defaultRoleClaimKeys
 	}
 
 	for _, key := range roleClaimKeys {
@@ -204,9 +211,16 @@ func (c *OAuthClient) decideRole(claims jwt.MapClaims) (role *model.Role, err er
 	return
 }
 
-func (c *OAuthClient) decideUserInfos(claims jwt.MapClaims) (username, avatarURL string, err error) {
+func (c *OAuthClient) decideUserInfos(claims jwt.MapClaims, usernameClaimKey, avatarURLClaimKey string) (username, avatarURL string, err error) {
 
 	username = ""
+	usernameClaimKeys := []string{}
+	if usernameClaimKey != "" {
+		usernameClaimKeys = append(usernameClaimKeys, usernameClaimKey)
+	} else {
+		usernameClaimKeys = defaultUsernameClaimKeys
+	}
+
 	for _, key := range usernameClaimKeys {
 		val, ok := claims[key]
 		if ok && val != nil {
@@ -223,6 +237,12 @@ func (c *OAuthClient) decideUserInfos(claims jwt.MapClaims) (username, avatarURL
 	}
 
 	avatarURL = ""
+	avatarURLClaimKeys := []string{}
+	if usernameClaimKey != "" {
+		avatarURLClaimKeys = append(avatarURLClaimKeys, avatarURLClaimKey)
+	} else {
+		avatarURLClaimKeys = defaultAvatarURLClaimKeys
+	}
 	for _, key := range avatarURLClaimKeys {
 		val, ok := claims[key]
 		if ok && val != nil {
